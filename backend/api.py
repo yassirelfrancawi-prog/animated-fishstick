@@ -6,12 +6,14 @@ Configuration :    backend/.env  (voir .env.example) — BOT_TOKEN + ALLOWED_IDS
 """
 import io
 import os
+import pathlib
 import zipfile
 from decimal import Decimal, InvalidOperation
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
 # Charge backend/.env si présent (BOT_TOKEN, ALLOWED_IDS).
@@ -29,6 +31,15 @@ import registre
 CATS_VALIDES = {v for k, v in vars(Cat).items() if not k.startswith("_")}
 
 app = FastAPI(title="Certifio — génération de fiches de paie")
+
+# Sert le frontend (dossier frontend/dist/)
+FRONTEND = pathlib.Path(__file__).parent.parent / "frontend" / "dist"
+if FRONTEND.exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND / "assets"), name="assets")
+
+    @app.get("/")
+    def index():
+        return FileResponse(FRONTEND / "index.html")
 
 
 class LigneIn(BaseModel):
