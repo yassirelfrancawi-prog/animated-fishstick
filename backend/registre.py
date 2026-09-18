@@ -14,7 +14,7 @@ from composer import _d
 from formats import eur_be
 from overlay import Champ, carte_depuis_echantillon
 
-RACINE = Path(__file__).resolve().parent.parent  # /Users/max/certifio
+RACINE = Path(__file__).resolve().parent.parent / "bordelpdf"
 
 
 @dataclass
