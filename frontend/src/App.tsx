@@ -7,7 +7,6 @@ import {
   Cell,
   Select,
   Switch,
-  Avatar,
   Title,
   Caption,
   Banner,
@@ -20,26 +19,73 @@ import {
   listerTemplates,
   type Templates,
 } from "./api";
+import {
+  lireSession,
+  seDeconnecter,
+  verifierSession,
+  type SessionUtilisateur,
+} from "./auth";
+import { LoginScreen } from "./LoginScreen";
 
 const TEMPLATE_GENERIQUE = "generique";
 
-interface UtilisateurTg {
-  id?: number;
-  first_name?: string;
-  last_name?: string;
-  username?: string;
-  photo_url?: string;
-}
-
 function parseDateFr(s: string): { annee: number; mois: number } {
-  // "JJ/MM/AAAA" → { annee, mois }. Fallback : mois courant.
   const m = s.match(/(\d{2})\/(\d{2})\/(\d{4})/);
   if (m) return { annee: parseInt(m[3]), mois: parseInt(m[2]) };
   const n = new Date();
   return { annee: n.getFullYear(), mois: n.getMonth() + 1 };
 }
 
-export function App() {
+// ─── Écran de compte inactif ──────────────────────────────────────────────
+function EcranInactif({ onDeconnexion }: { onDeconnexion: () => void }) {
+  return (
+    <div style={{
+      minHeight: "100dvh",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 24,
+      background: "var(--tgui--bg_color, #09090f)",
+      gap: 20,
+      textAlign: "center",
+    }}>
+      <div style={{
+        width: 56,
+        height: 56,
+        borderRadius: 16,
+        background: "rgba(239,68,68,0.12)",
+        border: "1px solid rgba(239,68,68,0.25)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 24,
+      }}>
+        🔒
+      </div>
+      <div>
+        <Title level="2" weight="2" style={{ color: "var(--tgui--text_color)", marginBottom: 8 }}>
+          Accès suspendu
+        </Title>
+        <Caption level="1" style={{ color: "var(--tgui--hint_color)", display: "block", maxWidth: 300 }}>
+          Votre abonnement n'est plus disponible.
+        </Caption>
+      </div>
+      <Button size="m" mode="outline" onClick={onDeconnexion}>
+        Se déconnecter
+      </Button>
+    </div>
+  );
+}
+
+// ─── Application principale ────────────────────────────────────────────────
+function AppPrincipale({
+  session,
+  onDeconnexion,
+}: {
+  session: SessionUtilisateur;
+  onDeconnexion: () => void;
+}) {
   const [c, setC] = useState<Config>(DEFAUTS);
   const [etat, setEtat] = useState("");
   const [occupe, setOccupe] = useState(false);
@@ -48,18 +94,13 @@ export function App() {
   const [modeAvance, setModeAvance] = useState(false);
   const [mode3Mois, setMode3Mois] = useState(false);
 
-  const tg = (window as unknown as {
-    Telegram?: { WebApp?: { initDataUnsafe?: { user?: UtilisateurTg } } };
-  }).Telegram?.WebApp?.initDataUnsafe?.user;
-
   useEffect(() => {
-    listerTemplates().then(setTemplates).catch(() => setTemplates({}));
-  }, []);
+    listerTemplates(session.token).then(setTemplates).catch(() => setTemplates({}));
+  }, [session.token]);
 
   const overlay = template !== TEMPLATE_GENERIQUE;
   const empFixe = overlay ? templates[template]?.employeur_fixe : undefined;
   const templatesOverlay = Object.entries(templates).filter(([, t]) => t.supporte_composer);
-  // Détecte un override ONSS aberrant (>25% du brut → saisie probablement erronée)
   const brutNum = parseFloat((c.brut || "0").replace(",", ".")) || 0;
   const onssNum = parseFloat((c.cotisations || "0").replace(",", ".")) || 0;
   const onssAberrant = brutNum > 0 && onssNum > brutNum * 0.25;
@@ -92,9 +133,11 @@ export function App() {
       let r;
       if (mode3Mois && overlay) {
         const { annee, mois } = parseDateFr(c.periodeDebut);
-        r = await genererTroisMoisConfig(template, annee, mois, cfg, bruts3Mois(c));
+        r = await genererTroisMoisConfig(template, annee, mois, cfg, bruts3Mois(c), session.token);
       } else {
-        r = overlay ? await genererFicheOverlay(template, cfg) : await genererConfig(cfg);
+        r = overlay
+          ? await genererFicheOverlay(template, cfg, session.token)
+          : await genererConfig(cfg, session.token);
       }
       if (r.blob) {
         window.open(URL.createObjectURL(r.blob), "_blank");
@@ -107,10 +150,7 @@ export function App() {
     }
   }
 
-  const ligneATN = (
-    k: "voiture" | "telephone" | "logement" | "internet",
-    label: string,
-  ) => (
+  const ligneATN = (k: "voiture" | "telephone" | "logement" | "internet", label: string) => (
     <>
       <Cell
         after={
@@ -132,12 +172,9 @@ export function App() {
     </>
   );
 
-  const nomTg = tg ? [tg.first_name, tg.last_name].filter(Boolean).join(" ") || tg.username : null;
-  const initiale = (tg?.first_name?.[0] || tg?.username?.[0] || "?").toUpperCase();
-
   return (
     <>
-      {/* Header sticky : titre à gauche, avatar Telegram à droite */}
+      {/* Header sticky */}
       <div
         style={{
           position: "sticky",
@@ -159,21 +196,35 @@ export function App() {
             Fiches de paie • Belgique
           </Caption>
         </div>
-        {tg && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div style={{ textAlign: "right" }}>
-              <Caption level="1" weight="2" style={{ display: "block" }}>
-                {nomTg}
-              </Caption>
-              {tg.username && (
-                <Caption level="2" style={{ color: "var(--tgui--hint_color)" }}>
-                  @{tg.username}
-                </Caption>
-              )}
-            </div>
-            <Avatar size={40} src={tg.photo_url} acronym={initiale} />
+        {/* Infos utilisateur + déconnexion */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ textAlign: "right" }}>
+            <Caption level="1" weight="2" style={{ display: "block", color: "var(--tgui--text_color)" }}>
+              {session.username}
+            </Caption>
+            <Caption
+              level="2"
+              style={{ color: "var(--tgui--hint_color)", cursor: "pointer", textDecoration: "underline" }}
+              onClick={onDeconnexion}
+            >
+              Déconnexion
+            </Caption>
           </div>
-        )}
+          <div style={{
+            width: 36,
+            height: 36,
+            borderRadius: 10,
+            background: "linear-gradient(135deg, #6366f1, #818cf8)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontWeight: 600,
+            fontSize: 14,
+            color: "#fff",
+          }}>
+            {session.username[0]?.toUpperCase() ?? "?"}
+          </div>
+        </div>
       </div>
 
       <List>
@@ -228,7 +279,7 @@ export function App() {
                   onChange={(e) => setMode3Mois(e.target.checked)}
                 />
               }
-              subtitle="Génère le mois choisi + les 2 précédents → ZIP (ou envoi des 3 PDF dans Telegram)"
+              subtitle="Génère le mois choisi + les 2 précédents → ZIP"
             >
               3 mois d'un coup
             </Cell>
@@ -319,7 +370,7 @@ export function App() {
             />
           )}
           {modeAvance && onssAberrant && (
-            <Cell subtitle="Cette valeur dépasse 25 % du brut → probablement une erreur. Vide ce champ pour laisser le calcul automatique.">
+            <Cell subtitle="Cette valeur dépasse 25 % du brut → probablement une erreur.">
               ⚠️ ONSS forcé anormalement élevé
             </Cell>
           )}
@@ -345,7 +396,7 @@ export function App() {
           <Banner
             type="section"
             header="Avantages (ATN) — non disponibles ici"
-            description="Ce template n'a pas de lignes ATN dans son sample. Bascule sur un template compatible pour les saisir."
+            description="Ce template n'a pas de lignes ATN. Bascule sur un template compatible."
           >
             {templateAtnSuggere && (
               <Button size="s" onClick={() => setTemplate(templateAtnSuggere)}>
@@ -390,11 +441,69 @@ export function App() {
           {etat && <Cell>{etat}</Cell>}
           <div style={{ padding: 16 }}>
             <Button stretched size="l" loading={occupe} disabled={occupe} onClick={generer}>
-              {mode3Mois && overlay ? "Générer 3 mois (ZIP / Telegram)" : "Générer la fiche"}
+              {mode3Mois && overlay ? "Générer 3 mois (ZIP)" : "Générer la fiche"}
             </Button>
           </div>
         </Section>
       </List>
     </>
   );
+}
+
+// ─── Racine avec garde d'authentification ─────────────────────────────────
+export function App() {
+  const [session, setSession] = useState<SessionUtilisateur | null | "chargement">("chargement");
+
+  useEffect(() => {
+    const locale = lireSession();
+    if (!locale) {
+      setSession(null);
+      return;
+    }
+    // Vérifie le token auprès du backend au démarrage
+    verifierSession(locale.token).then((s) => setSession(s));
+  }, []);
+
+  async function handleDeconnexion() {
+    if (session && session !== "chargement") {
+      await seDeconnecter(session.token);
+    }
+    setSession(null);
+  }
+
+  // Écran de chargement initial (vérification session)
+  if (session === "chargement") {
+    return (
+      <div style={{
+        minHeight: "100dvh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#09090f",
+      }}>
+        <div style={{
+          width: 28,
+          height: 28,
+          border: "2px solid rgba(99,102,241,0.3)",
+          borderTopColor: "#6366f1",
+          borderRadius: "50%",
+          animation: "spin 0.7s linear infinite",
+        }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  // Non connecté → écran de connexion
+  if (!session) {
+    return <LoginScreen onConnexion={setSession} />;
+  }
+
+  // Compte inactif ou désactivé
+  if (session.statut !== "actif") {
+    return <EcranInactif onDeconnexion={handleDeconnexion} />;
+  }
+
+  // Compte actif → application complète
+  return <AppPrincipale session={session} onDeconnexion={handleDeconnexion} />;
 }
