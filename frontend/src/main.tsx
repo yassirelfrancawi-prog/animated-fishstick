@@ -9,7 +9,7 @@ import { App } from "./App";
 window.Telegram?.WebApp?.ready();
 window.Telegram?.WebApp?.expand();
 
-// Apparence : suit Telegram si dispo, sinon dark (fond uniforme, plus joli en local).
+// Apparence : suit Telegram si dispo, sinon dark.
 const apparence =
   (window.Telegram?.WebApp?.colorScheme as "light" | "dark" | undefined) || "dark";
 
